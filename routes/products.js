@@ -1,150 +1,135 @@
 var express = require('express');
 const { ConnectionCheckOutFailedEvent } = require('mongodb');
 var router = express.Router();
-let productModel = require('../schemas/product')
-let CategoryModel = require('../schemas/category')
+let productModel = require('../schemas/product');
+let CategoryModel = require('../schemas/category');
 
-function buildQuery(obj){
-  console.log(obj);
+// Middleware kiểm tra quyền người dùng
+function verifyRole(role) {
+    return function (req, res, next) {
+        let token = req.headers['authorization'];
+        if (!token) {
+            return res.status(403).send({ success: false, message: "Token is required" });
+        }
+        token = token.split(" ")[1];
+        let userRole = getUserRoleFromToken(token);
+        if (userRole !== role && userRole !== 'admin') {
+            return res.status(403).send({ success: false, message: "You don't have permission to perform this action" });
+        }
+        next();
+    };
+}
+
+function buildQuery(obj) {
   let result = {};
-  if(obj.name){
-    result.name=new RegExp(obj.name,'i');
+  if (obj.name) {
+    result.name = new RegExp(obj.name, 'i');
   }
   result.price = {};
-  if(obj.price){
-    if(obj.price.$gte){
+  if (obj.price) {
+    if (obj.price.$gte) {
       result.price.$gte = obj.price.$gte;
-    }else{
-      result.price.$gte = 0
+    } else {
+      result.price.$gte = 0;
     }
-    if(obj.price.$lte){
+    if (obj.price.$lte) {
       result.price.$lte = obj.price.$lte;
-    }else{
+    } else {
       result.price.$lte = 10000;
     }
-  }else{
+  } else {
     result.price.$gte = 0;
     result.price.$lte = 10000;
   }
-  console.log(result);
   return result;
 }
 
-/* GET users listing. */
-router.get('/', async function(req, res, next) {
-  
-
+// Route lấy danh sách sản phẩm (không cần đăng nhập)
+router.get('/', async function (req, res, next) {
   let products = await productModel.find(buildQuery(req.query)).populate("category");
-
   res.status(200).send({
-    success:true,
-    data:products
+    success: true,
+    data: products
   });
 });
-router.get('/:id', async function(req, res, next) {
+
+// Route lấy thông tin chi tiết sản phẩm (không cần đăng nhập)
+router.get('/:id', async function (req, res, next) {
   try {
     let id = req.params.id;
     let product = await productModel.findById(id);
     res.status(200).send({
-      success:true,
-      data:product
+      success: true,
+      data: product
     });
   } catch (error) {
     res.status(404).send({
-      success:false,
-      message:"khong co id phu hop"
+      success: false,
+      message: "không có id phù hợp"
     });
   }
 });
 
-router.post('/', async function(req, res, next) {
+// Route tạo sản phẩm (chỉ mod và admin có quyền)
+router.post('/', verifyRole('mod'), async function (req, res, next) {
   try {
-    let cate = await CategoryModel.findOne({name:req.body.category})
-    if(cate){
+    let cate = await CategoryModel.findOne({ name: req.body.category });
+    if (cate) {
       let newProduct = new productModel({
         name: req.body.name,
-        price:req.body.price,
+        price: req.body.price,
         quantity: req.body.quantity,
-        category:cate._id
-      })
+        category: cate._id
+      });
       await newProduct.save();
       res.status(200).send({
-        success:true,
-        data:newProduct
+        success: true,
+        data: newProduct
       });
-    }else{
+    } else {
       res.status(404).send({
-        success:false,
-        data:"cate khong dung"
+        success: false,
+        message: "Danh mục không tồn tại"
       });
     }
   } catch (error) {
     res.status(404).send({
-      success:false,
-      message:error.message
+      success: false,
+      message: error.message
     });
   }
 });
-router.put('/:id', async function(req, res, next) {
+
+// Route cập nhật sản phẩm (chỉ mod và admin có quyền)
+router.put('/:id', verifyRole('mod'), async function (req, res, next) {
   try {
-    let updateObj = {};
-    let body = req.body;
-    if(body.name){
-      updateObj.name = body.name;
-    }
-    if(body.price){
-      updateObj.price = body.price;
-    }
-    if(body.quantity){
-      updateObj.quantity = body.quantity;
-    }
-    if(body.category){
-      let cate = await CategoryModel.findOne({name:req.body.category});
-      if(!cate){
-        res.status(404).send({
-          success:false,
-          message:error.message
-        });
-      }
-    }
-    let updatedProduct = await productModel.findByIdAndUpdate(req.params.id,
-      updateObj,
-      {new:true})
+    let updatedProduct = await productModel.findByIdAndUpdate(req.params.id, req.body, { new: true });
     res.status(200).send({
-      success:true,
-      data:updatedProduct
+      success: true,
+      data: updatedProduct
     });
   } catch (error) {
     res.status(404).send({
-      success:false,
-      message:error.message
+      success: false,
+      message: error.message
     });
   }
 });
-router.delete('/:id', async function(req, res, next) {
+
+// Route xóa sản phẩm (chỉ admin có quyền)
+router.delete('/:id', verifyRole('admin'), async function (req, res, next) {
   try {
-    let product = await productModel.findById(req.params.id);
-    if(product){
-      let deletedProduct = await productModel.findByIdAndUpdate(req.params.id,
-        {
-          isDeleted:true
-        },
-        {new:true})
-        res.status(200).send({
-          success:true,
-          data:deletedProduct
-        });
-    }else{
-      res.status(404).send({
-        success:false,
-        message:"ID khong ton tai"
-      });
-    }
+    await productModel.findByIdAndDelete(req.params.id);
+    res.status(200).send({
+      success: true,
+      message: "Sản phẩm đã bị xóa"
+    });
   } catch (error) {
     res.status(404).send({
-      success:false,
-      message:error.message
+      success: false,
+      message: "Không tìm thấy sản phẩm"
     });
   }
 });
+
 module.exports = router;
